@@ -3,46 +3,86 @@ import fs from 'fs/promises';
 import path from 'path';
 import * as cheerio from 'cheerio';
 
-// --------------
-// Naming helpers
-// --------------
-
+// Reemplaza todo lo que NO sea letra/número por '-'
 const sanitize = (value) => value.replace(/[^a-zA-Z0-9]/g, '-');
 
+// Nombre del HTML principal: host+pathname -> .html
 const makeHtmlFilenameFromUrl = (pageUrl) => {
   const { host, pathname } = new URL(pageUrl);
   return `${sanitize(`${host}${pathname}`)}.html`;
 };
 
-const makeFilesDirnameFromUrl = (pageUrl) => {
-  const htmlName = makeHtmlFilenameFromUrl(pageUrl);
-  return htmlName.replace(/\.html$/, '_files');
-};
+// Nombre de carpeta de recursos: igual que el html pero con _files
+const makeFilesDirnameFromUrl = (pageUrl) => makeHtmlFilenameFromUrl(pageUrl).replace(/\.html$/, '_files');
 
+// Recurso -> filename: host + path(sin ext) sanitizado + ext
+// Si el recurso NO tiene ext se usa .html
 const makeResourceFilename = (pageUrl, resourcePath) => {
-  // resourcePath puede ser "/assets/professions/nodejs.png"
-  // Queremos: "codica-la-assets-professions-nodejs.png"
   const { host } = new URL(pageUrl);
-  const ext = path.extname(resourcePath) || '';
-  const withoutExt = resourcePath.replace(ext, '');
-  const raw = `${host}${withoutExt}`; // "codica.la/assets/professions/nodejs"
+
+  const extFromPath = path.extname(resourcePath);
+  const ext = extFromPath === '' ? '.html' : extFromPath;
+
+  const withoutExt = extFromPath === '' ? resourcePath : resourcePath.slice(0, -extFromPath.length);
+
+  const raw = `${host}${withoutExt}`;
   return `${sanitize(raw)}${ext}`;
 };
 
-const isLocalResource = (src) => {
-  // local: empieza con "/" o es relativo (no tiene protocolo)
-  // ignoramos "http://", "https://", "data:"
-  return src
-    && !src.startsWith('http://')
-    && !src.startsWith('https://')
-    && !src.startsWith('data:');
+// local solo si:
+// - NO tiene protocolo (http/https/data)
+// - y el host resultante (resuelto contra la pageUrl) es el mismo host de la página
+const isLocalResource = (pageUrl, ref) => {
+  if (!ref) return false;
+  if (ref.startsWith('http://') || ref.startsWith('https://') || ref.startsWith('data:')) return false;
+
+  const pageHost = new URL(pageUrl).host;
+  const resolved = new URL(ref, pageUrl);
+  return resolved.host === pageHost;
 };
 
-const toAbsoluteResourceUrl = (pageUrl, src) => new URL(src, pageUrl).toString();
+// Construye URL absoluta del recurso
+const toAbsoluteResourceUrl = (pageUrl, ref) => new URL(ref, pageUrl).toString();
 
-// -------------------
-// Main loader function
-// -------------------
+// Descarga binaria genérica (sirve para png/jpg/css/js/html de canonical)
+const downloadAndSave = (resourceUrl, destinationPath) =>
+  axios.get(resourceUrl, { responseType: 'arraybuffer' })
+    .then((res) => fs.writeFile(destinationPath, res.data));
+
+// Extrae recursos del DOM (img/link/script)
+const collectResources = (pageUrl, $) => {
+  const resources = [];
+
+  // img[src]
+  $('img[src]').each((_, el) => {
+    const node = $(el);
+    const src = node.attr('src');
+    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src });
+  });
+
+  // script[src]
+  $('script[src]').each((_, el) => {
+    const node = $(el);
+    const src = node.attr('src');
+    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src });
+  });
+
+  // link[href] solo rel stylesheet o canonical
+  $('link[href]').each((_, el) => {
+    const node = $(el);
+    const href = node.attr('href');
+    const rel = (node.attr('rel') || '').toLowerCase();
+
+    const isStylesheet = rel === 'stylesheet';
+    const isCanonical = rel === 'canonical';
+
+    if ((isStylesheet || isCanonical) && isLocalResource(pageUrl, href)) {
+      resources.push({ node, attr: 'href', ref: href });
+    }
+  });
+
+  return resources;
+};
 
 export default (pageUrl, outputDir = process.cwd()) => {
   const htmlFilename = makeHtmlFilenameFromUrl(pageUrl);
@@ -52,50 +92,37 @@ export default (pageUrl, outputDir = process.cwd()) => {
   const filesDirPath = path.join(outputDir, filesDirname);
   const absoluteHtmlPath = path.resolve(htmlPath);
 
-  // 1) bajar HTML
+  // 1) bajar HTML principal (texto)
   return axios.get(pageUrl)
     .then((response) => {
       const html = response.data;
-
-      // 2) parsear HTML
       const $ = cheerio.load(html);
 
-      // 3) encontrar imágenes locales
-      const imgElements = $('img[src]')
-        .toArray()
-        .map((el) => $(el))
-        .filter((el) => isLocalResource(el.attr('src')));
+      // 2) detectar recursos locales
+      const resources = collectResources(pageUrl, $);
 
-      // si no hay imágenes locales, guardamos HTML tal cual
-      if (imgElements.length === 0) {
+      // Si no hay recursos, html tal cual
+      if (resources.length === 0) {
         return fs.writeFile(htmlPath, html, 'utf-8').then(() => absoluteHtmlPath);
       }
 
-      // 4) crear carpeta _files
+      // 3) crear carpeta _files
       return fs.mkdir(filesDirPath, { recursive: true })
         .then(() => {
-          // 5) descargar y guardar cada imagen (promesas en paralelo)
-          const downloads = imgElements.map((img) => {
-            const src = img.attr('src');
+          // 4) descargar recursos en paralelo + reescribir html
+          const tasks = resources.map(({ node, attr, ref }) => {
+            const absUrl = toAbsoluteResourceUrl(pageUrl, ref);
+            const filename = makeResourceFilename(pageUrl, ref);
+            const resourcePath = path.join(filesDirPath, filename);
 
-            const resourceUrl = toAbsoluteResourceUrl(pageUrl, src);
-            const resourceFilename = makeResourceFilename(pageUrl, src);
-            const resourcePath = path.join(filesDirPath, resourceFilename);
+            // Reescribe el atributo en el DOM a ruta local (siempre con '/')
+            node.attr(attr, path.posix.join(filesDirname, filename));
 
-            // reescribe el src en el DOM a ruta local
-            img.attr('src', path.posix.join(filesDirname, resourceFilename));
-
-            // descarga binaria (arraybuffer) y guarda
-            return axios.get(resourceUrl, { responseType: 'arraybuffer' })
-              .then((res) => fs.writeFile(resourcePath, res.data));
+            return downloadAndSave(absUrl, resourcePath);
           });
 
-          return Promise.all(downloads)
-            .then(() => {
-              // 6) guardar HTML ya modificado
-              const updatedHtml = $.html();
-              return fs.writeFile(htmlPath, updatedHtml, 'utf-8');
-            })
+          return Promise.all(tasks)
+            .then(() => fs.writeFile(htmlPath, $.html(), 'utf-8'))
             .then(() => absoluteHtmlPath);
         });
     });
