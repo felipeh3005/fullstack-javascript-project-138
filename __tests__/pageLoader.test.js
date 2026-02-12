@@ -109,4 +109,61 @@ describe('pageLoader', () => {
 
     scope.done();
   });
+
+  test('throws HttpError when main page returns non-200', async () => {
+    const url = 'https://codica.la/cursos';
+
+    const scope = nock('https://codica.la')
+      .get('/cursos')
+      .reply(404, 'Not Found');
+
+    await expect(pageLoader(url, tempDir))
+      .rejects
+      .toMatchObject({
+        name: 'HttpError',
+        status: 404,
+        resourceUrl: url,
+      });
+
+    scope.done();
+  });
+
+  test('throws NetworkError on network failure', async () => {
+    const url = 'https://codica.la/cursos';
+
+    const scope = nock('https://codica.la')
+      .get('/cursos')
+      .replyWithError({ message: 'boom', code: 'ECONNREFUSED' });
+
+    await expect(pageLoader(url, tempDir))
+      .rejects
+      .toMatchObject({
+        name: 'NetworkError',
+        resourceUrl: url,
+      });
+
+    scope.done();
+  });
+
+  test('throws FileSystemError when output dir does not exist', async () => {
+    const url = 'https://codica.la/cursos';
+
+    const html = '<html><head><title>Ok</title></head><body>Hi</body></html>';
+
+    const scope = nock('https://codica.la')
+      .get('/cursos')
+      .reply(200, html);
+
+    // Este directorio NO existe (y no lo vamos a crear)
+    // En Windows esto es estable y no depende de permisos.
+    const missingDir = path.join(tempDir, 'no-such-dir', 'nested');
+
+    await expect(pageLoader(url, missingDir))
+      .rejects
+      .toMatchObject({
+        name: 'FileSystemError',
+      });
+
+    scope.done();
+  });
 });
