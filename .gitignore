@@ -23,3 +23,7 @@ Thumbs.db
 # temp
 tmp/
 temp/
+
+# page-loader outputs (generated files)
+*.html
+*_files/

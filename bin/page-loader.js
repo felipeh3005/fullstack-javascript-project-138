@@ -9,12 +9,9 @@ const { version } = require('../package.json');
 
 const program = new Command();
 
-// Formatea un error de la librería en un mensaje entendible.
 const formatCliError = (error) => {
-  // Donde ocurrió el problema (URL o path)
   const resource = error.resourceUrl || error.filepath || 'unknown resource';
 
-  // Los errores en la librería tienen name: HttpError/NetworkError/FileSystemError
   if (error.name === 'HttpError') {
     const status = error.status || (error.cause && error.cause.response && error.cause.response.status);
     return `Error: HTTP ${status ?? 'unknown'} while fetching ${resource}`;
@@ -39,14 +36,15 @@ program
   .version(version)
   .argument('<url>')
   .option('-o, --output [dir]', 'output dir', process.cwd())
+  // 👇 esto SÍ funciona siempre en commander: crea options.progress = false si lo pasas
+  .option('--no-progress', 'disable download progress')
   .action((url, options) => {
-    pageLoader(url, options.output)
+    pageLoader(url, options.output, { progress: options.progress })
       .then((filepath) => {
         console.log(filepath);
       })
       .catch((error) => {
         console.error(formatCliError(error));
-
         process.exitCode = 1;
       });
   });

@@ -25,7 +25,8 @@
     "axios": "1.1.3",
     "cheerio": "^1.0.0-rc.12",
     "commander": "^11.0.0",
-    "debug": "^4.4.3"
+    "debug": "^4.4.3",
+    "listr": "^0.14.3"
   },
   "devDependencies": {
     "axios-debug-log": "^1.0.0",

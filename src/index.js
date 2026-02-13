@@ -1,88 +1,94 @@
-import axios from 'axios';
-import fs from 'fs/promises';
-import path from 'path';
-import * as cheerio from 'cheerio';
-import debug from 'debug';
-import { createRequire } from 'module';
-import { format } from 'node:util';
-import { HttpError, NetworkError, FileSystemError } from './errors.js';
+import axios from 'axios'; // HTTP client para descargar HTML y recursos
+import fs from 'fs/promises'; // API async de filesystem
+import path from 'path'; // utilidades de paths (Windows/Linux)
+import * as cheerio from 'cheerio'; // parser HTML tipo jQuery
+import debug from 'debug'; // logger por namespaces
+import { createRequire } from 'module'; // para require() en ESM
+import { format } from 'node:util'; // formateo tipo printf para logs
+import { HttpError, NetworkError, FileSystemError } from './errors.js'; // errores tipados del proyecto
 
-const debugLog = debug('page-loader');
+const debugLog = debug('page-loader'); // namespace principal de debug
 
 const isDebugEnabled = () => {
-  const envDebug = process.env.DEBUG || '';
-  const isNamespaceEnabled = envDebug.includes('page-loader');
-  const isRunningTestDebug = process.env.npm_lifecycle_event === 'test:debug';
-  return isNamespaceEnabled || isRunningTestDebug;
+  const envDebug = process.env.DEBUG || ''; // lee DEBUG (puede venir vacío)
+  const isNamespaceEnabled = envDebug.includes('page-loader'); // activa si DEBUG incluye page-loader
+  const isRunningTestDebug = process.env.npm_lifecycle_event === 'test:debug'; // atajo para npm run test:debug
+  return isNamespaceEnabled || isRunningTestDebug; // true si cualquiera aplica
 };
 
 // Logger visible: SOLO imprime si DEBUG incluye "page-loader" o en npm run test:debug
 const log = (...args) => {
-  debugLog(...args);
+  debugLog(...args); // manda al sistema debug (si está habilitado)
 
-  if (isDebugEnabled()) {
-    process.stderr.write(`${format(...args)}\n`);
+  if (isDebugEnabled()) { // si está habilitado el modo visible
+    process.stderr.write(`${format(...args)}\n`); // escribe a STDERR para no contaminar STDOUT
   }
 };
 
 // axios-debug-log es CommonJS -> createRequire
-const require = createRequire(import.meta.url);
+const require = createRequire(import.meta.url); // habilita require() en este módulo ESM
+
+// listr es CommonJS -> createRequire
+const ListrModule = require('listr'); // carga listr desde CommonJS
+const Listr = ListrModule.default ?? ListrModule; // soporta export default o module.exports
+
 try {
-  require('axios-debug-log/enable');
-  // Log para confirmar que el plugin de axios quedó habilitado (visible en test:debug)
-  log('axios debug logging enabled');
+  require('axios-debug-log/enable'); // hookea axios para logs (si está instalado)
+  log('axios debug logging enabled'); // log visible si aplica
 } catch (e) {
-  // Si no existe el paquete o falla su carga, no se rompe la app: solo se reporta en debug
-  log('axios debug logging not enabled');
-};
+  log('axios debug logging not enabled'); // no rompe el programa si falta
+}
 
 // Wrapper HTTP:
 // - Si status != 200 => HttpError (con resourceUrl y status)
 // - Si falla la red (sin response) => NetworkError
 // Nota: seguimos con promesas, nada de async/await.
 const fetchOrThrow = (url, config = {}) =>
-  axios.get(url, config)
-    .then((res) => {
-      if (res.status !== 200) {
-        throw new HttpError(`HTTP ${res.status} when fetching ${url}`, {
-          resourceUrl: url,
-          status: res.status,
+  axios.get(url, config) // hace GET con axios
+    .then((res) => { // si axios respondió
+      if (res.status !== 200) { // si no es 200
+        throw new HttpError(`HTTP ${res.status} when fetching ${url}`, { // lanza error tipado
+          resourceUrl: url, // url que falló
+          status: res.status, // status devuelto
         });
       }
-      return res;
+      return res; // status 200 => devuelve la respuesta
     })
-    .catch((err) => {
-      // Si ya es HttpError, lo dejamos pasar
-      if (err instanceof HttpError) throw err;
+    .catch((err) => { // axios falló
+      if (err instanceof HttpError) throw err; // si ya es HttpError, se propaga
 
-      // axios: err.response existe cuando hay respuesta HTTP (por ejemplo 404, 500, etc.)
-      if (err.response && err.response.status) {
-        throw new HttpError(`HTTP ${err.response.status} when fetching ${url}`, {
-          resourceUrl: url,
-          status: err.response.status,
-          cause: err,
+      if (err.response && err.response.status) { // axios con response (404/500/etc)
+        throw new HttpError(`HTTP ${err.response.status} when fetching ${url}`, { // error HTTP tipado
+          resourceUrl: url, // url que falló
+          status: err.response.status, // status recibido
+          cause: err, // causa original
         });
       }
 
-      // Error de red (sin response): DNS, ECONNREFUSED, timeout, etc.
-      throw new NetworkError(`Network error when fetching ${url}`, {
-        resourceUrl: url,
-        cause: err,
+      throw new NetworkError(`Network error when fetching ${url}`, { // error de red (sin response)
+        resourceUrl: url, // url que falló
+        cause: err, // causa original (ENOTFOUND/ECONNREFUSED/etc)
       });
     });
 
 // Wrapper FS: writeFile con error amigable y con el path que falló
 const writeFileOrThrow = (filepath, data, encoding) =>
-  fs.writeFile(filepath, data, encoding)
-    .catch((err) => {
-      throw new FileSystemError(`Cannot write file ${filepath}`, { filepath, cause: err });
+  fs.writeFile(filepath, data, encoding) // intenta escribir el archivo
+    .catch((err) => { // si falla
+      throw new FileSystemError(`Cannot write file ${filepath}`, { // error tipado de FS
+        filepath, // ruta que falló
+        cause: err, // causa original (ENOENT/EACCES/etc)
+      });
     });
 
 // Wrapper FS: mkdir con error amigable y con el path que falló
 const mkdirOrThrow = (dirpath) =>
-  fs.mkdir(dirpath, { recursive: true })
-    .catch((err) => {
-      throw new FileSystemError(`Cannot create directory ${dirpath}`, { filepath: dirpath, cause: err });
+  fs.mkdir(dirpath, { recursive: true }) // crea directorio recursivo
+    .catch((err) => { // si falla
+      throw new FileSystemError(`Cannot create directory ${dirpath}`, { // error tipado de FS
+        filepath: dirpath, // reutilizamos 'filepath' para compatibilidad
+        cause: err, // causa original
+      });
     });
 
 // Reemplaza todo lo que NO sea letra/número por '-'
@@ -90,165 +96,174 @@ const sanitize = (value) => value.replace(/[^a-zA-Z0-9]/g, '-');
 
 // Nombre del HTML principal: host+pathname -> .html
 const makeHtmlFilenameFromUrl = (pageUrl) => {
-  const { host, pathname } = new URL(pageUrl);
-  return `${sanitize(`${host}${pathname}`)}.html`;
+  const { host, pathname } = new URL(pageUrl); // parsea host y pathname
+  return `${sanitize(`${host}${pathname}`)}.html`; // genera nombre final
 };
 
 // Nombre de carpeta de recursos: igual que el html pero con _files
 const makeFilesDirnameFromUrl = (pageUrl) =>
-  makeHtmlFilenameFromUrl(pageUrl).replace(/\.html$/, '_files');
+  makeHtmlFilenameFromUrl(pageUrl).replace(/\.html$/, '_files'); // reemplaza extensión por _files
 
 // Recurso -> filename: host + path(sin ext) sanitizado + ext
 // Si el recurso NO tiene ext se usa .html
-const makeResourceFilename = (pageUrl, resourcePath) => {
-  const { host } = new URL(pageUrl);
+const makeResourceFilename = (pageUrl, resourceUrlOrRef) => {
+  const { host } = new URL(pageUrl); // host base de la página
 
-  const extFromPath = path.extname(resourcePath);
-  const ext = extFromPath === '' ? '.html' : extFromPath;
+  // (Windows): si viene con ?query o #hash, NO puede ir al nombre del archivo.
+  const resolved = new URL(resourceUrlOrRef, pageUrl); // resuelve relativo/absoluto
+  const cleanPathname = resolved.pathname; // SOLO pathname, sin ?query ni #hash
+
+  const extFromPath = path.extname(cleanPathname); // extrae extensión desde pathname limpio
+  const ext = extFromPath === '' ? '.html' : extFromPath; // si no hay extensión => .html
 
   const withoutExt = extFromPath === ''
-    ? resourcePath
-    : resourcePath.slice(0, -extFromPath.length);
+    ? cleanPathname // sin extensión, usamos pathname tal cual
+    : cleanPathname.slice(0, -extFromPath.length); // quitamos la extensión si existe
 
-  const raw = `${host}${withoutExt}`;
-  return `${sanitize(raw)}${ext}`;
+  const raw = `${host}${withoutExt}`; // construimos base: host + path
+  return `${sanitize(raw)}${ext}`; // sanitizamos y pegamos la extensión
 };
 
 // local solo si:
-// - NO tiene protocolo (http/https/data)
+// - NO es data:
 // - y el host resultante (resuelto contra la pageUrl) es el mismo host de la página
 const isLocalResource = (pageUrl, ref) => {
-  if (!ref) return false;
-  if (ref.startsWith('http://') || ref.startsWith('https://') || ref.startsWith('data:')) return false;
+  if (!ref) return false; // sin valor, no hay recurso
+  const resolved = new URL(ref, pageUrl); // resuelve el ref (relativo o absoluto)
+  if (resolved.protocol === 'data:') return false; // data: nunca se descarga
 
-  const pageHost = new URL(pageUrl).host;
-  const resolved = new URL(ref, pageUrl);
-  return resolved.host === pageHost;
+  const pageHost = new URL(pageUrl).host; // host de la página
+  return resolved.host === pageHost; // local si el host coincide exactamente
 };
 
 // Construye URL absoluta del recurso
-const toAbsoluteResourceUrl = (pageUrl, ref) => new URL(ref, pageUrl).toString();
+const toAbsoluteResourceUrl = (pageUrl, ref) => new URL(ref, pageUrl).toString(); // normaliza a string absoluta
 
 // Descarga binaria genérica (sirve para png/jpg/css/js/html de canonical)
 const downloadAndSave = (resourceUrl, destinationPath) =>
-  // responseType arraybuffer: evita que axios intente interpretar binarios como texto y los corrompa
-  fetchOrThrow(resourceUrl, { responseType: 'arraybuffer' })
-    .then((res) => writeFileOrThrow(destinationPath, res.data));
+  fetchOrThrow(resourceUrl, { responseType: 'arraybuffer' }) // arraybuffer evita corrupción de binarios
+    .then((res) => writeFileOrThrow(destinationPath, res.data)); // guarda el buffer en disco
 
 // Extrae recursos del DOM (img/link/script)
 const collectResources = (pageUrl, $) => {
-  const resources = [];
+  const resources = []; // lista de trabajos a descargar
 
   // img[src]
   $('img[src]').each((_, el) => {
-    const node = $(el);
-    const src = node.attr('src');
-    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src });
+    const node = $(el); // envuelve el elemento
+    const src = node.attr('src'); // toma src
+    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src }); // agrega si es local
   });
 
   // script[src]
   $('script[src]').each((_, el) => {
-    const node = $(el);
-    const src = node.attr('src');
-    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src });
+    const node = $(el); // envuelve el elemento
+    const src = node.attr('src'); // toma src
+    if (isLocalResource(pageUrl, src)) resources.push({ node, attr: 'src', ref: src }); // agrega si es local
   });
 
   // link[href] solo rel stylesheet o canonical
   $('link[href]').each((_, el) => {
-    const node = $(el);
-    const href = node.attr('href');
-    const rel = (node.attr('rel') || '').toLowerCase();
+    const node = $(el); // envuelve el elemento
+    const href = node.attr('href'); // toma href
+    const rel = (node.attr('rel') || '').toLowerCase(); // toma rel en minúsculas
 
-    const isStylesheet = rel === 'stylesheet';
-    const isCanonical = rel === 'canonical';
+    const isStylesheet = rel === 'stylesheet'; // detecta CSS
+    const isCanonical = rel === 'canonical'; // detecta canonical
 
-    if ((isStylesheet || isCanonical) && isLocalResource(pageUrl, href)) {
-      resources.push({ node, attr: 'href', ref: href });
+    if ((isStylesheet || isCanonical) && isLocalResource(pageUrl, href)) { // filtra por tipo y local
+      resources.push({ node, attr: 'href', ref: href }); // agrega si aplica
     }
   });
 
-  return resources;
+  return resources; // devuelve la lista
 };
 
-export default (pageUrl, outputDir = process.cwd()) => {
-  const htmlFilename = makeHtmlFilenameFromUrl(pageUrl);
-  const filesDirname = makeFilesDirnameFromUrl(pageUrl);
+// Ejecuta descargas de recursos:
+// - Con progreso: Listr concurrent (verbose)
+// - Sin progreso: Promise.all (igual concurrent)
+const downloadResources = (resourceJobs, showProgress) => {
+  if (!showProgress) { // si no queremos UI
+    return Promise.all(resourceJobs.map((job) => job.run())); // descarga todo en paralelo sin spinners
+  }
 
-  const htmlPath = path.join(outputDir, htmlFilename);
-  const filesDirPath = path.join(outputDir, filesDirname);
-  const absoluteHtmlPath = path.resolve(htmlPath);
+  const tasks = resourceJobs.map((job) => ({
+    title: job.title, // se muestra en la UI
+    task: () => job.run(), // función que ejecuta la descarga
+  }));
 
-  // Log de inicio: depura qué se está descargando y hacia dónde
-  log('start: url=%s outputDir=%s', pageUrl, outputDir);
-  // Log de rutas calculadas: para detectar errores de naming o paths en Windows
-  log('paths: html=%s filesDir=%s', htmlPath, filesDirPath);
+  return new Listr(tasks, { // crea lista de tareas con Listr
+    concurrent: true, // paralelo
+    renderer: 'verbose', // modo visible (líneas start/completed)
+  }).run(); // ejecuta
+};
 
-  // 1) bajar HTML principal (texto)
-  return fetchOrThrow(pageUrl)
+export default (pageUrl, outputDir = process.cwd(), options = {}) => {
+  // CLAVE: la librería por defecto NO muestra progreso.
+  // El CLI es el que decide pasar { progress: true/false }.
+  const showProgress = options.progress === true; // solo true explícito activa Listr
+
+  const htmlFilename = makeHtmlFilenameFromUrl(pageUrl); // nombre de html principal
+  const filesDirname = makeFilesDirnameFromUrl(pageUrl); // nombre de carpeta _files
+
+  const htmlPath = path.join(outputDir, htmlFilename); // path destino del html
+  const filesDirPath = path.join(outputDir, filesDirname); // path destino de la carpeta
+  const absoluteHtmlPath = path.resolve(htmlPath); // path absoluto para retorno final
+
+  log('start: url=%s outputDir=%s', pageUrl, outputDir); // log inicio
+  log('paths: html=%s filesDir=%s', htmlPath, filesDirPath); // log rutas
+
+  return fetchOrThrow(pageUrl) // descarga HTML principal
     .then((response) => {
-      // Log de respuesta HTML: status y tamaño aproximado (no imprime el HTML completo)
-      log('html downloaded: status=%d bytes=%d', response.status, String(response.data).length);
+      log('html downloaded: status=%d bytes=%d', response.status, String(response.data).length); // log HTML
 
-      const html = response.data;
-      const $ = cheerio.load(html);
+      const html = response.data; // contenido HTML
+      const $ = cheerio.load(html); // parsea HTML
 
-      // 2) detectar recursos locales
-      const resources = collectResources(pageUrl, $);
+      const resources = collectResources(pageUrl, $); // detecta recursos locales
+      log('local resources found: %d', resources.length); // log cantidad
 
-      // Log de conteo de recursos: dice si el selector/criterio "local" está filtrando de más
-      log('local resources found: %d', resources.length);
-
-      // Si no hay recursos, html tal cual
-      if (resources.length === 0) {
-        // Log para dejar claro que se ejecutó el camino "solo HTML"
-        log('no resources found: saving html only');
-        return writeFileOrThrow(htmlPath, html, 'utf-8')
+      if (resources.length === 0) { // si no hay recursos
+        log('no resources found: saving html only'); // log camino corto
+        return writeFileOrThrow(htmlPath, html, 'utf-8') // guarda HTML principal
           .then(() => {
-            // Log de confirmación de guardado (ruta absoluta es lo que devuelve la función)
-            log('saved html: %s', absoluteHtmlPath);
-            return absoluteHtmlPath;
+            log('saved html: %s', absoluteHtmlPath); // log guardado
+            return absoluteHtmlPath; // devuelve path final
           });
       }
 
-      // 3) crear carpeta _files
-      return mkdirOrThrow(filesDirPath)
+      return mkdirOrThrow(filesDirPath) // crea carpeta _files
         .then(() => {
-          // Log de creación de directorio: si falla por permisos/ruta
-          log('created files dir: %s', filesDirPath);
+          log('created files dir: %s', filesDirPath); // log carpeta creada
 
-          // 4) descargar recursos en paralelo + reescribir HTML
-          const tasks = resources.map(({ node, attr, ref }) => {
-            const absUrl = toAbsoluteResourceUrl(pageUrl, ref);
-            const filename = makeResourceFilename(pageUrl, ref);
-            const resourcePath = path.join(filesDirPath, filename);
+          const resourceJobs = resources.map(({ node, attr, ref }) => { // crea jobs por recurso
+            const absUrl = toAbsoluteResourceUrl(pageUrl, ref); // URL absoluta
+            const filename = makeResourceFilename(pageUrl, ref); // nombre seguro (sin ? ni #)
+            const resourcePath = path.join(filesDirPath, filename); // destino en disco
 
-            // Log por recurso: muestra qué URL se descarga y dónde se guarda
-            log('download resource: %s -> %s', absUrl, resourcePath);
+            log('download resource: %s -> %s', absUrl, resourcePath); // log por recurso
 
-            // Reescribe el atributo en el DOM a ruta local (siempre con '/')
-            // path.posix.join fuerza '/' incluso en Windows, porque dentro del HTML son rutas tipo URL
-            node.attr(attr, path.posix.join(filesDirname, filename));
+            node.attr(attr, path.posix.join(filesDirname, filename)); // reescribe el HTML con path tipo URL
 
-            return downloadAndSave(absUrl, resourcePath);
+            return { // job final para downloader
+              title: absUrl, // título visible en listr
+              run: () => downloadAndSave(absUrl, resourcePath), // descarga + guarda
+            };
           });
 
-          return Promise.all(tasks)
+          return downloadResources(resourceJobs, showProgress) // descarga con o sin progreso (ambos concurrentes)
             .then(() => {
-              // Log cuando todos los recursos terminaron (si se queda colgado, fue en descargas)
-              log('all resources downloaded: %d', tasks.length);
-              return writeFileOrThrow(htmlPath, $.html(), 'utf-8');
+              log('all resources downloaded: %d', resourceJobs.length); // log final recursos
+              return writeFileOrThrow(htmlPath, $.html(), 'utf-8'); // guarda HTML reescrito
             })
             .then(() => {
-              // Log final de éxito: el caller recibe esta ruta absoluta
-              log('saved final html: %s', absoluteHtmlPath);
-              return absoluteHtmlPath;
+              log('saved final html: %s', absoluteHtmlPath); // log final
+              return absoluteHtmlPath; // devuelve resultado
             });
         });
     })
     .catch((err) => {
-      // Log completo del error: stack, mensaje y propiedades extra
-      log('error occurred: %O', err);
-      // error para que el caller (CLI/tests) lo maneje como corresponda
-      throw err;
+      log('error occurred: %O', err); // log error completo si debug habilitado
+      throw err; // siempre re-lanzamos para que el CLI decida cómo imprimir/salir
     });
 };
