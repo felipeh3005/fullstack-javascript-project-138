@@ -7,3 +7,4 @@
 [Ver demo descarga de recursos CSS y JS](https://github.com/felipeh3005/fullstack-javascript-project-138/blob/main/page-loader-resourses-demo.mp4)
 [Ver demo logs debug](https://github.com/felipeh3005/fullstack-javascript-project-138/blob/main/debug-logs-demo.mp4)
 [Ver demo de manejo de errores](https://github.com/felipeh3005/fullstack-javascript-project-138/blob/main/page-loader-error-demo.mp4)
+[Ver demo de progreso concurrente con Listr](https://github.com/felipeh3005/fullstack-javascript-project-138/blob/main/page-loader-progress-demo.mp4)
