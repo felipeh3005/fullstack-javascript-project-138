@@ -81,9 +81,10 @@ const writeFileOrThrow = (filepath, data, encoding) =>
       });
     });
 
-// Wrapper FS: mkdir con error amigable y con el path que falló
+// - Si outputDir no existe => esto debe fallar
+// - *_files dentro de un outputDir ya existente.
 const mkdirOrThrow = (dirpath) =>
-  fs.mkdir(dirpath, { recursive: true }) // crea directorio recursivo
+  fs.mkdir(dirpath) // crea SOLO el último nivel
     .catch((err) => { // si falla
       throw new FileSystemError(`Cannot create directory ${dirpath}`, { // error tipado de FS
         filepath: dirpath, // reutilizamos 'filepath' para compatibilidad
@@ -232,7 +233,7 @@ export default (pageUrl, outputDir = process.cwd(), options = {}) => {
           });
       }
 
-      return mkdirOrThrow(filesDirPath) // crea carpeta _files
+      return mkdirOrThrow(filesDirPath) // crea carpeta _files (fallará si outputDir no existe)
         .then(() => {
           log('created files dir: %s', filesDirPath); // log carpeta creada
 
