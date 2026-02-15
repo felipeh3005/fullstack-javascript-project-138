@@ -1,14 +1,4 @@
-export class PageLoaderError extends Error {
-  constructor(message, options = {}) {
-    super(message);
-    this.name = this.constructor.name;
-    this.cause = options.cause;
-    this.resourceUrl = options.resourceUrl;
-    this.filepath = options.filepath;
-    this.status = options.status;
-  }
-}
-
-export class HttpError extends PageLoaderError {}
-export class NetworkError extends PageLoaderError {}
-export class FileSystemError extends PageLoaderError {}
+export { default as PageLoaderError } from './errors/PageLoaderError.js';
+export { default as HttpError } from './errors/HttpError.js';
+export { default as NetworkError } from './errors/NetworkError.js';
+export { default as FileSystemError } from './errors/FileSystemError.js';

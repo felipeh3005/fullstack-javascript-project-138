@@ -13,7 +13,9 @@ const formatCliError = (error) => {
   const resource = error.resourceUrl || error.filepath || 'unknown resource';
 
   if (error.name === 'HttpError') {
-    const status = error.status || (error.cause && error.cause.response && error.cause.response.status);
+    const status = error.status
+      || (error.cause && error.cause.response && error.cause.response.status);
+
     return `Error: HTTP ${status ?? 'unknown'} while fetching ${resource}`;
   }
 
@@ -36,7 +38,6 @@ program
   .version(version)
   .argument('<url>')
   .option('-o, --output [dir]', 'output dir', process.cwd())
-  // 👇 esto SÍ funciona siempre en commander: crea options.progress = false si lo pasas
   .option('--no-progress', 'disable download progress')
   .action((url, options) => {
     pageLoader(url, options.output, { progress: options.progress })
