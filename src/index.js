@@ -30,6 +30,7 @@ const log = (...args) => {
 
 const require = createRequire(import.meta.url);
 const ListrModule = require('listr');
+
 const Listr = ListrModule.default ?? ListrModule;
 
 try {
